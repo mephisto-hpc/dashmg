@@ -7,8 +7,7 @@ rm -Rf overview_0*.csv
 `dirname $0`/overview.gnuplot -e "filename='<name_of_tracefile.csv>'"
 
 
-ls image_unit0.csv.* 2>/dev/null || exit 0
-
+shopt -s nullglob
 for i in image_unit0.csv.*; do
     NUM=`echo $i|sed -e 's/image_unit0.csv.//'`
     echo -n $NUM" "
