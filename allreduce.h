@@ -5,8 +5,8 @@
 
 #ifdef SCOREP_USER_ENABLE
 #include <scorep/SCOREP_User.h>
-#define SCOREP_USER_FUNC() SCOREP_USER_REGION(__PRETTY_FUNCTION__, \
-                                                SCOREP_USER_REGION_TYPE_FUNCTION)
+#define SCOREP_USER_FUNC() \
+        SCOREP_USER_REGION(__PRETTY_FUNCTION__, SCOREP_USER_REGION_TYPE_FUNCTION)
 #else
 #define SCOREP_USER_FUNC()
 #endif
@@ -55,16 +55,17 @@ public:
 
         /* now all new values are there, get the maximum on unit 0 */
         if ( 0 == team.myid() ) {
-          /*for(const auto& elem : centralized.local)
-            std::cout << elem << ",";
-          std::cout << std::endl;*/
-          distributed.local[0] =
-            *std::max_element(centralized.lbegin(), centralized.lbegin() + team.size());
+            /*for(const auto& elem : centralized.local)
+              std::cout << elem << ",";
+            std::cout << std::endl;*/
+            distributed.local[0] =
+                *std::max_element(centralized.lbegin(), centralized.lbegin() + team.size());
 
-          for(auto i = 1; i < team.size(); ++i)
-            distributed.async[i].set(distributed.local[0]);
+            for (auto i = 1; i < team.size(); ++i)
+                distributed.async[i].set(distributed.local[0]);
         }
     }
+
 #if 0
     /* broadcast the value from unit 0 to all units in the given team
     which might be a subteam of the team from constuction time */
@@ -78,8 +79,8 @@ public:
             distributed.async[i].set(distributed.local[0]);
         }
     }
-
 #endif
+
     void wait( dash::Team& team ) {
         SCOREP_USER_FUNC()
 
@@ -91,11 +92,11 @@ public:
     need to be followed by collect() eventually */
     void set( double* res, dash::Team& team ) {
         SCOREP_USER_FUNC()
-      //std::cout << "TEST - " << team.myid() << " -> " << res << std::endl;
-      if(team.myid() != 0)
-        centralized.async[team.myid()].set(res);
-      else
-        centralized.local[0] = *res;
+        //std::cout << "TEST - " << team.myid() << " -> " << res << std::endl;
+        if (team.myid() != 0)
+            centralized.async[team.myid()].set(res);
+        else
+            centralized.local[0] = *res;
     }
 
     double get() const {
