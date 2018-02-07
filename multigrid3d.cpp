@@ -8,6 +8,8 @@
 #include <utility>
 #include <math.h>
 
+#include <alpaka/alpaka.hpp>
+
 #include "allreduce.h"
 #include "minimonitoring.h"
 
@@ -241,6 +243,271 @@ private:
     StencilOpT _stencil_op_1;
     StencilOpT _stencil_op_2;
 
+};
+
+#if !defined(GPU_NTHREADS)
+# if defined(USE_GPU)
+#  define GPU_NTHREADS 32
+# else
+#  define GPU_NTHREADS 1
+# endif
+#endif
+struct AlpakaState
+{
+    using Dim = alpaka::dim::DimInt<1>;
+    using WorkDiv = alpaka::workdiv::WorkDivMembers<Dim, size_t>;
+
+    using Host = alpaka::acc::AccCpuSerial<Dim, size_t>;
+    using QueueHost = alpaka::queue::QueueCpuSync;
+    using DevHost = alpaka::dev::Dev<Host>;
+    using PltfHost = alpaka::pltf::Pltf<DevHost>;
+
+#if defined(USE_GPU)
+    using Acc = alpaka::acc::AccGpuCudaRt<Dim, size_t>;
+    using QueueAcc = alpaka::queue::QueueCudaRtSync;
+#else
+# if defined(USE_OMP2BLOCKS)
+    using Acc = alpaka::acc::AccCpuOmp2Blocks<Dim, size_t>;
+# else
+    using Acc = alpaka::acc::AccCpuSerial<Dim, size_t>;
+# endif
+    using QueueAcc = alpaka::queue::QueueCpuSync;
+#endif
+    using DevAcc = alpaka::dev::Dev<Acc>;
+    using PltfAcc = alpaka::pltf::Pltf<DevAcc>;
+
+    using HostView = alpaka::mem::view::ViewPlainPtr<DevHost, double, Dim, size_t>;
+    using DevBuf = alpaka::mem::buf::Buf<DevAcc, double, Dim, size_t>;
+
+
+    template<
+        typename TDevAcc = DevAcc,
+        typename Sfinae = void
+    >
+    struct BufMirror
+    {
+        BufMirror(
+            double* ptr,
+            DevHost& devHost,
+            TDevAcc& devAcc,
+            size_t size)
+        :
+            m_size(size),
+            m_hostPtr(ptr, devHost, m_size),
+            m_accPtr(alpaka::mem::buf::alloc<double, size_t>(devAcc, size))
+        {
+        }
+
+        BufMirror(BufMirror const &) = default;
+        BufMirror(BufMirror &&) = default;
+        auto operator=(BufMirror const &) -> BufMirror & = default;
+        auto operator=(BufMirror &&) -> BufMirror & = default;
+        ~BufMirror() = default;
+
+        template<
+            typename TQueue
+        >
+        void put(TQueue& queue)
+        {
+            alpaka::mem::view::copy(queue, m_accPtr, m_hostPtr, m_size);
+            alpaka::wait::wait(queue);
+        }
+
+        template<
+            typename TQueue
+        >
+        void get(TQueue& queue)
+        {
+            alpaka::mem::view::copy(queue, m_hostPtr, m_accPtr, m_size);
+            alpaka::wait::wait(queue);
+        }
+
+        double* native()
+        {
+           return alpaka::mem::view::getPtrNative(m_accPtr);
+        }
+
+        size_t   m_size;
+        HostView m_hostPtr;
+        DevBuf   m_accPtr;
+    };
+
+    template<
+        typename TDevAcc
+    >
+    struct BufMirror<
+        TDevAcc,
+        typename std::enable_if<
+            std::is_same<
+                TDevAcc,
+                alpaka::dev::Dev<
+                    alpaka::acc::AccCpuOmp2Blocks<
+                        Dim,
+                        size_t
+                    >
+                >
+            >::value
+        >::type
+    >
+    {
+        BufMirror(
+            double* ptr,
+            DevHost& devHost,
+            TDevAcc& devAcc,
+            size_t size)
+        :
+            m_size(size),
+            m_hostPtr(ptr, devHost, m_size)
+        {
+        }
+
+        BufMirror(BufMirror const &) = default;
+        BufMirror(BufMirror &&) = default;
+        auto operator=(BufMirror const &) -> BufMirror & = default;
+        auto operator=(BufMirror &&) -> BufMirror & = default;
+        ~BufMirror() = default;
+
+        template<
+            typename TQueue
+        >
+        void put(TQueue& queue)
+        {
+        }
+
+        template<
+            typename TQueue
+        >
+        void get(TQueue& queue)
+        {
+        }
+
+        double* native()
+        {
+           return alpaka::mem::view::getPtrNative(m_hostPtr);
+        }
+
+        size_t   m_size;
+        HostView m_hostPtr;
+    };
+
+    AlpakaState(Level& level)
+    :
+        m_level(level),
+        m_blocks(m_level.src_grid->local.extent(0) - 2),
+        m_devHost(alpaka::pltf::getDevByIdx<PltfHost>(0u)),
+        m_devAcc(alpaka::pltf::getDevByIdx<PltfAcc>(0u)),
+        m_queueAcc(m_devAcc),
+        // N = (ld-2) * (lh-2) * (lw-2)
+        // N = #b * #t * #e
+        // cpu => #t == 1 => #b = N / #e
+        //                   (ld-2) * (lh-2) * (lw-2) =
+        // gpu => #e == 1 => #b = N / #t
+        //                   (ld-2) * (lh-2) * (lw-2) =
+        m_workDiv(m_blocks, size_t(GPU_NTHREADS), size_t(1u)),
+        m_rhsMirror(m_level.rhs_grid->lbegin(), m_devHost, m_devAcc, m_level.rhs_grid->local.size()),
+        m_mirrors({
+            BufMirror<>(m_level.src_halo->matrix().lbegin(),
+                m_devHost,
+                m_devAcc,
+                m_level.src_halo->matrix().local.size()),
+            BufMirror<>(m_level.dst_halo->matrix().lbegin(),
+                m_devHost,
+                m_devAcc,
+                m_level.src_halo->matrix().local.size())}),
+        m_mirror(0),
+        m_residuals(new double[m_blocks]),
+        m_resMirror(m_residuals, m_devHost, m_devAcc, sizeof(double) * m_blocks)
+    {
+    }
+
+    ~AlpakaState()
+    {
+        delete[] m_residuals;
+    }
+
+    template<
+        typename TKernelFnObj,
+        typename... TArgs>
+    void exec(
+        TKernelFnObj && kernelFnObj,
+        TArgs && ... args)
+    {
+        alpaka::kernel::exec< Acc >(
+            m_queueAcc,
+            m_workDiv,
+            std::forward<TKernelFnObj>(kernelFnObj),
+            std::forward<TArgs>(args)...);
+    }
+
+    void putSrc()
+    {
+        m_mirrors[m_mirror].put(m_queueAcc);
+    }
+
+    void putRhs()
+    {
+        m_rhsMirror.put(m_queueAcc);
+    }
+
+    void getDst()
+    {
+        m_mirrors[!m_mirror].get(m_queueAcc);
+    }
+
+    double* nativeSrc()
+    {
+        return m_mirrors[m_mirror].native();
+    }
+
+    double* nativeRhs()
+    {
+        return m_rhsMirror.native();
+    }
+
+    double* nativeDst()
+    {
+        return m_mirrors[!m_mirror].native();
+    }
+
+    void initResidual()
+    {
+        std::fill(m_residuals, m_residuals + m_blocks, 0.0);
+        m_resMirror.put(m_queueAcc);
+    }
+
+    double getResidual()
+    {
+        m_resMirror.get(m_queueAcc);
+        return *std::max_element(m_residuals, m_residuals + m_blocks);
+    }
+
+    double* nativeRes()
+    {
+        return m_resMirror.native();
+    }
+
+    Level& level()
+    {
+        return m_level;
+    }
+
+    void swap()
+    {
+        m_level.swap();
+        m_mirror = !m_mirror;
+    }
+
+    Level& m_level;
+    size_t m_blocks;
+    DevHost m_devHost;
+    DevAcc m_devAcc;
+    QueueAcc m_queueAcc;
+    WorkDiv m_workDiv;
+    BufMirror<> m_rhsMirror;
+    std::array<BufMirror<>, 2> m_mirrors;
+    int m_mirror;
+    double* m_residuals;
+    BufMirror<> m_resMirror;
 };
 
 
@@ -807,6 +1074,8 @@ cout << "unit " << dash::myid() << " transfertomore" << endl;
 
 static inline double update_inner_dash( Level& level, double coeff )
 {
+    using index_t = dash::default_index_t;
+
     double ax= level.ax;
     double ay= level.ay;
     double az= level.az;
@@ -819,7 +1088,7 @@ static inline double update_inner_dash( Level& level, double coeff )
     double localres= 0.0;
     auto p_rhs=   level.rhs_grid->lbegin();
     level.src_op->inner.update(level.dst_grid->lbegin(),
-        [&](auto* center, auto* center_dst, auto offset, const auto& offsets) {
+        [&](double* center, double* center_dst, index_t offset, const std::array<index_t, 26>& offsets) {
                 double dtheta= m * (
                     ff * p_rhs[offset] -
                     ax * ( center[offsets[4]] + center[offsets[5]] ) -
@@ -835,92 +1104,132 @@ static inline double update_inner_dash( Level& level, double coeff )
 
 
 template<
-    unsigned int NTHREADS
+    typename TType,
+    size_t TSize
 >
-struct UpdateInnerAcc
+struct SMArray
 {
-    void operator()( Level& level, double coeff, size_t z, double* res ) const
-    {
-        size_t lh= level.src_grid->local.extent(1);
-        size_t lw= level.src_grid->local.extent(2);
+    TType m_data[TSize];
 
-        double ax= level.ax;
-        double ay= level.ay;
-        double az= level.az;
-        double ac= level.acenter;
-        double ff= level.ff;
-        double m= level.m;
+    template<
+        typename TIdx
+    >
+    ALPAKA_FN_HOST_ACC const TType &
+    operator[](const TIdx idx) const {
+        return m_data[idx];
+    }
 
-        const double c= coeff;
-
-        auto layer_size = lw * lh;
-
-        const double* __restrict p_src=  level.src_grid->lbegin();
-        const double* __restrict p_rhs=   level.rhs_grid->lbegin();
-        double* __restrict p_dst= level.dst_grid->lbegin();
-
-        std::array<double, NTHREADS> localres;
-        #pragma unroll
-        for (unsigned int tidx = 0; tidx < NTHREADS; tidx++)
-            localres[tidx]= 0.0;
-
-        for ( size_t y= 0; y < lh-2; y++ ) {
-            auto core_offset = (z + 1) * layer_size + lw + 1
-                               + y * lw;
-
-            /* this should eventually be done with Alpaka or Kokkos to look
-            much nicer but still be fast */
-
-            #pragma unroll
-            for (unsigned int tidx = 0; tidx < NTHREADS; tidx++) {
-                for ( size_t x= tidx; x < lw-2; x+=NTHREADS ) {
-
-                    /*
-                    stability condition: r <= 1/2 with r= dt/h^2 ==> dt <= 1/2*h^2
-                    dtheta= ru*u_plus + ru*u_minus - 2*ru*u_center with ru=dt/hu^2 <= 1/2
-                    */
-                    double dtheta= m * (
-                        ff * p_rhs[core_offset+x] -
-                        ax * ( p_src[core_offset+x-1] +          p_src[core_offset+x+1] ) -
-                        ay * ( p_src[core_offset+x-lw] +         p_src[core_offset+x+lw] ) -
-                        az * ( p_src[core_offset+x-layer_size] + p_src[core_offset+x+layer_size] ) -
-                        ac * p_src[core_offset+x] );
-                    p_dst[core_offset+x]= p_src[core_offset+x] + c * dtheta;
-
-                    localres[tidx] = std::max( localres[tidx], std::fabs( dtheta ) );
-                }
-            }
-        }
-
-        // start reduction
-        auto n = NTHREADS / 2;
-        while (n) {
-            #pragma unroll
-            for (unsigned int tidx = 0; tidx < n && (tidx + n) < NTHREADS; tidx++)
-                localres[tidx] = std::max( localres[tidx], localres[tidx + n] );
-            n /= 2;
-        }
-
-        *res = localres[0];
+    template<
+        typename TIdx
+    >
+    ALPAKA_FN_HOST_ACC TType &
+    operator[](const TIdx idx) {
+        return m_data[idx];
     }
 };
 
 template<
     unsigned int NTHREADS
 >
-static inline double update_inner_acc( Level& level, double coeff )
+struct UpdateInnerAcc
 {
-    size_t ld= level.src_grid->local.extent(0);
+    template<
+        typename TAcc
+    >
+    ALPAKA_FN_ACC void operator()(
+        TAcc const& acc,
+        size_t lh, size_t lw,
+        double ax, double ay, double az, double ac,
+        double ff, double m, double c,
+        const double* src,
+        const double* rhs,
+        double* dst,
+        double* residuals ) const
+    {
+        auto const threadId(alpaka::idx::getIdx<alpaka::Block, alpaka::Threads>(acc)[0u]);
+
+        /* The block id is our z-lane index */
+        auto const z(alpaka::idx::getIdx<alpaka::Grid, alpaka::Blocks>(acc)[0u]);
+
+        auto layer_size = lw * lh;
+
+#if defined(USE_GPU)
+        auto && localres = alpaka::block::shared::st::allocVar<SMArray<double, NTHREADS>, __COUNTER__>(acc);
+#else
+        SMArray<double, NTHREADS> localres;
+#endif
+        localres[threadId] = 0.0;
+
+        for ( size_t y= 0; y < lh-2; y++ ) {
+            auto core_offset = (z + 1) * layer_size + lw + 1
+                               + y * lw;
+
+            // let all threads of the block sync with the same line
+            syncBlockThreads(acc);
+
+            for ( size_t x= threadId; x < lw-2; x+=NTHREADS ) {
+
+                /*
+                stability condition: r <= 1/2 with r= dt/h^2 ==> dt <= 1/2*h^2
+                dtheta= ru*u_plus + ru*u_minus - 2*ru*u_center with ru=dt/hu^2 <= 1/2
+                */
+                double dtheta= m * (
+                    ff * rhs[core_offset+x] -
+                    ax * ( src[core_offset+x-1] +          src[core_offset+x+1] ) -
+                    ay * ( src[core_offset+x-lw] +         src[core_offset+x+lw] ) -
+                    az * ( src[core_offset+x-layer_size] + src[core_offset+x+layer_size] ) -
+                    ac * src[core_offset+x] );
+                dst[core_offset+x]= src[core_offset+x] + c * dtheta;
+
+                localres[threadId]= alpaka::math::max(acc, localres[threadId], alpaka::math::abs(acc, dtheta));
+            }
+        }
+        syncBlockThreads(acc);
+
+        // start reduction
+        auto n = NTHREADS / 2;
+        while (n) {
+            if (threadId < n && (threadId + n) < NTHREADS)
+                localres[threadId] = alpaka::math::max(acc, localres[threadId], localres[threadId + n]);
+            n /= 2;
+            syncBlockThreads(acc);
+        }
+
+        if (threadId == 0)
+            residuals[z] = localres[threadId];
+    }
+};
+
+template<
+    unsigned int NTHREADS
+>
+static inline double update_inner_acc( AlpakaState& alpakaState, double coeff )
+{
+    size_t lh= alpakaState.level().src_grid->local.extent(1);
+    size_t lw= alpakaState.level().src_grid->local.extent(2);
+
+    double ax= alpakaState.level().ax;
+    double ay= alpakaState.level().ay;
+    double az= alpakaState.level().az;
+    double ac= alpakaState.level().acenter;
+    double ff= alpakaState.level().ff;
+    double m= alpakaState.level().m;
+
+    alpakaState.putSrc();
+    alpakaState.putRhs();
+    alpakaState.initResidual();
 
     UpdateInnerAcc<NTHREADS> kernel;
-    double localres= 0.0;
-    for ( size_t z= 0; z < ld-2; z++ ) {
-        double localresz= 0.0;
-        kernel(level, coeff, z, &localresz);
-        localres = std::max( localres, localresz );
-    }
+    alpakaState.exec(
+        kernel,
+        lh, lw, ax, ay, az, ac, ff, m, coeff,
+        alpakaState.nativeSrc(),
+        alpakaState.nativeRhs(),
+        alpakaState.nativeDst(),
+        alpakaState.nativeRes());
 
-    return localres;
+    alpakaState.getDst();
+    return alpakaState.getResidual();
 }
 
 /**
@@ -929,8 +1238,10 @@ Smoothen the given level from oldgrid+src_halo to newgrid. Call Level::swap() at
 The parallel global residual is returned as a return parameter, but only
 if it is not NULL because then the expensive parallel reduction is just avoided.
 */
-double smoothen( Level& level, Allreduce& res, double coeff= 1.0 ) {
+double smoothen( AlpakaState& alpakaState, Allreduce& res, double coeff= 1.0 ) {
     SCOREP_USER_FUNC()
+
+    Level& level(alpakaState.level());
 
     uint32_t par= level.src_grid->team().size();
 
@@ -967,12 +1278,13 @@ double smoothen( Level& level, Allreduce& res, double coeff= 1.0 ) {
 #if 1
     double localres = update_inner_dash(level, coeff);
 #else
-    double localres = update_inner_acc<1>(level, coeff);
+    double localres = update_inner_acc<GPU_NTHREADS>(alpakaState, coeff);
 #endif
     minimon.stop( "smoothen_inner", par, /* elements */ (ld-2)*(lh-2)*(lw-2), /* flops */ 16*(ld-2)*(lh-2)*(lw-2), /*loads*/ 7*(ld-2)*(lh-2)*(lw-2), /* stores */ (ld-2)*(lh-2)*(lw-2) );
 
     // smoothen_wait
     minimon.start();
+
     // wait for async halo update
 
     level.src_halo->wait();
@@ -1025,7 +1337,7 @@ double smoothen( Level& level, Allreduce& res, double coeff= 1.0 ) {
 
     minimon.stop( "smoothen_wait_res", par );
 
-    level.swap();
+    alpakaState.swap();
 
     minimon.stop( "smoothen", par, /* elements */ ld*lh*lw,
         /* flops */ 16*ld*lh*lw, /*loads*/ 7*ld*lh*lw, /* stores */ ld*lh*lw );
@@ -1048,10 +1360,10 @@ void recursive_cycle( Iterator it, Iterator itend,
         /* smoothen completely  */
         uint32_t j= 0;
         res.reset( (*it)->src_grid->team() );
+        AlpakaState alpakaState(**it);
         while ( res.get() > epsilon ) {
             /* need global residual for iteration count */
-            smoothen( **it, res );
-
+            smoothen( alpakaState, res );
             j++;
         }
         if ( 0 == dash::myid() ) {
@@ -1127,12 +1439,15 @@ void recursive_cycle( Iterator it, Iterator itend,
     /* smoothen fixed number of times */
     uint32_t j= 0;
     res.reset( (*it)->src_grid->team() );
-    while ( res.get() > epsilon && j < beta ) {
+    {
+        AlpakaState alpakaState(**it);
+        while ( res.get() > epsilon && j < beta ) {
 
-        /* need global residual for iteration count */
-        smoothen( **it, res );
+            /* need global residual for iteration count */
+            smoothen( alpakaState, res );
 
-        j++;
+            j++;
+        }
     }
     if ( 0 == dash::myid()  ) {
         cout << "smoothing " <<
@@ -1175,12 +1490,15 @@ void recursive_cycle( Iterator it, Iterator itend,
 
     j= 0;
     res.reset( (*it)->src_grid->team() );
-    while ( res.get() > epsilon && j < beta ) {
+    {
+        AlpakaState alpakaState(**it);
+        while ( res.get() > epsilon && j < beta ) {
 
-        /* need global residual for iteration count */
-        smoothen( **it, res );
+            /* need global residual for iteration count */
+            smoothen( alpakaState, res );
 
-        j++;
+            j++;
+        }
     }
     if ( 0 == dash::myid() ) {
         cout << "smoothing " <<
@@ -1201,9 +1519,10 @@ void smoothen_final( Level& level, double epsilon, Allreduce& res ) {
 
     uint32_t j= 0;
     res.reset( level.src_grid->team() );
+    AlpakaState alpakaState(level);
     while ( res.get() > epsilon ) {
 
-        smoothen( level, res );
+        smoothen( alpakaState, res );
         j++;
     }
     if ( 0 == dash::myid() ) {
@@ -1647,24 +1966,27 @@ double do_simulation( uint32_t howmanylevels, double timerange, double timestep,
 
     if ( 0 == dash::myid() ) { cout << "t= " << time << " j= " << j << endl; }
 
-    while ( time < timerange ) {
+    {
+        AlpakaState alpakaState(*level);
+        while ( time < timerange ) {
 
-        while ( time + dt < timenext ) {
+            while ( time + dt < timenext ) {
 
-            smoothen( *level, res, dt );
+                smoothen( alpakaState, res, dt );
+                ++j;
+                time += dt;
+                // if ( 0 == dash::myid() ) { cout << "t= " << time << " dt= " << dt << endl; }
+            }
+
+            double shorten= ( timenext - time ) / dt;
+            smoothen( alpakaState, res, dt*shorten );
             ++j;
-            time += dt;
-            // if ( 0 == dash::myid() ) { cout << "t= " << time << " dt= " << dt << endl; }
+
+            time += timenext - time;
+            timenext += timestep;
+
+            if ( 0 == dash::myid() ) { cout << "t= " << time << " j= " << j << endl; }
         }
-
-        double shorten= ( timenext - time ) / dt;
-         smoothen( *level, res, dt*shorten );
-        ++j;
-
-        time += timenext - time;
-        timenext += timestep;
-
-        if ( 0 == dash::myid() ) { cout << "t= " << time << " j= " << j << endl; }
     }
 
 
@@ -1740,11 +2062,14 @@ double do_flat_iteration( uint32_t howmanylevels, double eps, std::array< double
     minimon.start();
 
     uint32_t j= 0;
-    while ( res.get() > eps && j < 100000 ) {
+    {
+        AlpakaState alpakaState(*level);
+        while ( res.get() > eps && j < 100000 ) {
 
-        smoothen( *level, res );
+            smoothen( alpakaState, res );
 
-        j++;
+            j++;
+        }
     }
     if ( 0 == dash::myid() ) {
         cout << "smoothing: " << j << " steps finest with residual " << res.get() << endl;

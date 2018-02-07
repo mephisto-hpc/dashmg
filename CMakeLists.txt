@@ -5,11 +5,40 @@ PROJECT(dashmg)
 SET(CMAKE_CXX_STANDARD 14)
 SET(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+SET(ALPAKA_ROOT "${CMAKE_CURRENT_LIST_DIR}/alpaka" CACHE STRING "The location of the alpaka library")
+LIST(APPEND CMAKE_MODULE_PATH "${ALPAKA_ROOT}")
+FIND_PACKAGE(alpaka REQUIRED)
+
 FIND_PACKAGE(dash-mpi REQUIRED)
 
-ADD_EXECUTABLE(
+INCLUDE("${ALPAKA_ROOT}/cmake/common.cmake")
+
+IF(CMAKE_VERSION VERSION_LESS 3.7.0)
+    INCLUDE_DIRECTORIES(
+        ${alpaka_INCLUDE_DIRS})
+    ADD_DEFINITIONS(
+        ${alpaka_DEFINITIONS})
+ENDIF()
+
+ALPAKA_ADD_EXECUTABLE(
     multigrid3d
     "multigrid3d.cpp")
 TARGET_LINK_LIBRARIES(
     multigrid3d
-    PUBLIC "${DASH_LIBRARIES}")
+    PUBLIC "${DASH_LIBRARIES};alpaka")
+
+ALPAKA_ADD_EXECUTABLE(
+    multigrid3d-omp
+    "multigrid3d-omp.cpp")
+TARGET_LINK_LIBRARIES(
+    multigrid3d-omp
+    PUBLIC "${DASH_LIBRARIES};alpaka")
+
+IF(ALPAKA_ACC_GPU_CUDA_ENABLE)
+    ALPAKA_ADD_EXECUTABLE(
+        multigrid3d-gpu
+        "multigrid3d-gpu.cpp")
+    TARGET_LINK_LIBRARIES(
+        multigrid3d-gpu
+        PUBLIC "${DASH_LIBRARIES};alpaka")
+ENDIF()
