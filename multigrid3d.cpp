@@ -3268,307 +3268,6 @@ double do_flat_iteration( uint32_t howmanylevels, double eps, std::array< double
 }
 
 
-bool do_test_old_scaledown() {
-
-    TeamSpecT teamspec( dash::Team::All().size(), 1, 1 );
-    teamspec.balance_extents();
-
-    Level* a= new Level( 1.0, 1.0, 1.0, 15, 15, 15, dash::Team::All(), teamspec );
-    Level* b= new Level( 1.0, 1.0, 1.0, 7, 7, 7, dash::Team::All(), teamspec );
-
-    dash::fill( a->src_grid->begin(), a->src_grid->end(), 1 );
-    a->src_grid->barrier();
-    dash::fill( b->src_grid->begin(), b->src_grid->end(), 0 );
-    b->src_grid->barrier();
-
-    if ( 0 == dash::myid() ) {
-
-        a->printout();
-        //b->printout();
-    }
-
-    b->src_grid->barrier();
-    scaledown( *a, *b );
-    b->src_grid->barrier();
-
-    if ( 0 == dash::myid() ) {
-
-        b->printout();
-    }
-
-    b->src_grid->barrier();
-
-    delete a;
-    delete b;
-
-    return true;
-}
-
-
-bool do_test_old_scaleup() {
-
-    TeamSpecT teamspec( dash::Team::All().size(), 1, 1 );
-    teamspec.balance_extents();
-
-    Level* a= new Level( 1.0, 1.0, 1.0, 4, 4, 4, dash::Team::All(), teamspec );
-    Level* b= new Level( 1.0, 1.0, 1.0, 8, 8, 8, dash::Team::All(), teamspec );
-
-    dash::fill( a->src_grid->begin(), a->src_grid->end(), 1 );
-    a->src_grid->barrier();
-    dash::fill( b->src_grid->begin(), b->src_grid->end(), 0 );
-    b->src_grid->barrier();
-
-    if ( 0 == dash::myid() ) {
-
-        a->printout();
-        //b->printout();
-    }
-
-    b->src_grid->barrier();
-    scaleup( *a, *b );
-    b->src_grid->barrier();
-
-    if ( 0 == dash::myid() ) {
-
-        b->printout();
-    }
-
-    b->src_grid->barrier();
-
-    delete a;
-    delete b;
-
-    return true;
-}
-
-
-bool do_test_new_scaleup_loop_coarse() {
-
-    TeamSpecT teamspec( dash::Team::All().size(), 1, 1 );
-    teamspec.balance_extents();
-
-    Level* a= new Level( 1.0, 1.0, 1.0, 7, 7, 7, dash::Team::All(), teamspec );
-    Level* b= new Level( 1.0, 1.0, 1.0, 15, 15, 15, dash::Team::All(), teamspec );
-
-    dash::fill( a->src_grid->begin(), a->src_grid->end(), 1 );
-    a->src_grid->barrier();
-    a->src_halo->set_custom_halos(  []( const auto& coords ) { return 1.0; } );
-    dash::fill( b->src_grid->begin(), b->src_grid->end(), 0 );
-    b->src_grid->barrier();
-
-    if ( 0 == dash::myid() ) {
-
-        a->printout();
-        //b->printout();
-    }
-
-    b->src_grid->barrier();
-    //scaleup_loop_coarse( *a, *b );
-    scaleup( *a, *b );
-    b->src_grid->barrier();
-
-    if ( 0 == dash::myid() ) {
-
-        b->printout();
-    }
-
-    b->src_grid->barrier();
-
-    delete a;
-    delete b;
-
-    return true;
-}
-
-
-bool do_test_new_scaleup_loop_fine() {
-
-    TeamSpecT teamspec( dash::Team::All().size(), 1, 1 );
-    teamspec.balance_extents();
-
-    Level* a= new Level( 1.0, 1.0, 1.0, 7, 7, 7, dash::Team::All(), teamspec );
-    Level* b= new Level( 1.0, 1.0, 1.0, 15, 15, 15, dash::Team::All(), teamspec );
-
-    dash::fill( a->src_grid->begin(), a->src_grid->end(), 1.0 );
-    a->src_grid->barrier();
-    dash::fill( b->src_grid->begin(), b->src_grid->end(), 0.0 );
-    b->src_grid->barrier();
-
-    if ( 0 == dash::myid() ) {
-
-        a->printout();
-        //b->printout();
-    }
-
-    dash::barrier();
-    scaleup_loop_fine( *a, *b );
-    dash::barrier();
-
-    if ( 0 == dash::myid() ) {
-
-        b->printout();
-    }
-
-    b->src_grid->barrier();
-
-    delete a;
-    delete b;
-
-    return true;
-}
-
-
-bool do_test_initboundary() {
-
-    TeamSpecT teamspec( dash::Team::All().size(), 1, 1 );
-    teamspec.balance_extents();
-
-    //Level* a= new Level( 1.0, 1.0, 1.0, 15, 15, 15, dash::Team::All(), teamspec );
-    Level* a= new Level( 1.0, 1.0, 1.0, 7, 7, 7, dash::Team::All(), teamspec );
-
-    initboundary( *a );
-
-    a->printout_halo();
-
-    delete a;
-
-    return true;
-}
-
-bool do_test_writetocsv() {
-
-    TeamSpecT teamspec( dash::Team::All().size(), 1, 1 );
-    teamspec.balance_extents();
-
-    Level* a= new Level( 1.0, 1.0, 1.0, 15, 15, 15, dash::Team::All(), teamspec );
-
-    initboundary( *a );
-    initgrid( *a );
-
-    delete a;
-
-    return true;
-}
-
-
-bool do_test_scaleupdown() {
-
-    if ( 0 == dash::myid() ) {
-        cout << "== test scaleupdown ==" << endl;
-    }
-
-    TeamSpecT teamspec( dash::Team::All().size(), 1, 1 );
-    teamspec.balance_extents();
-
-    Level* a= new Level( 1.0, 1.0, 1.0, 15, 15, 15, dash::Team::All(), teamspec );
-    Level* b= new Level( 1.0, 1.0, 1.0, 7, 7, 7, dash::Team::All(), teamspec );
-
-    /* fill scr_grid and _dst_grid such that it looks like the
-    residual is 0.1 in every element from a previous smoothen step */
-    dash::fill( a->src_grid->begin(), a->src_grid->end(), 1 );
-    dash::fill( a->dst_grid->begin(), a->dst_grid->end(), 0.9 );
-
-    if ( 0 == dash::myid() ) {
-        cout << "fill a->src_grid with 1.0 and a->dst_grid with 0.9" << endl;
-    }
-
-    a->src_grid->barrier();
-
-    /* scale down, b should be 0.1 everywhere */
-    scaledown( *a, *b );
-    b->src_grid->barrier();
-
-    if ( 0 == dash::myid() ) {
-
-        cout << "Scale down a to b, should produce 0.1 in b->rhs" << endl;
-        b->printout_rhs();
-    }
-
-    b->src_grid->barrier();
-
-    Allreduce res( dash::Team::All() );
-    res.reset( dash::Team::All() );
-    smoothen( *b, res );
-    b->src_grid->barrier();
-
-    if ( 0 == dash::myid() ) {
-
-        cout << "smoothen once on coarse grid" << endl;
-        b->printout();
-    }
-
-    scaleup( *b, *a );
-    a->src_grid->barrier();
-
-
-    if ( 0 == dash::myid() ) {
-
-        cout << "Scale up adding to a, should produce 1.1 in the inner area of a" << endl;
-        a->printout();
-    }
-
-    a->src_grid->barrier();
-
-    delete a;
-    delete b;
-
-    return true;
-}
-
-
-/* a number of tests ... restructure the code to headers and source files, then
-do a separate main() with all the tests in a separate source file */
-bool do_tests( ) {
-
-    bool success;
-    bool allsuccess= true;
-
-    if ( 0 == dash::myid() ) { cout << "run built-in tests:" << endl; }
-
-    /*
-    success= do_test_old_scaledown();
-    if ( 0 == dash::myid() ) { cout << "   old scaledown: " << success << endl; }
-    allsuccess &= success;
-    */
-
-    /*
-    success= do_test_old_scaleup();
-    if ( 0 == dash::myid() ) { cout << "   old scaleup: " << success << endl; }
-    allsuccess &= success;
-    */
-
-    /*
-    success= do_test_new_scaleup_loop_coarse();
-    if ( 0 == dash::myid() ) { cout << "   new scaleup loop coarse: " << success << endl; }
-    allsuccess &= success;
-    */
-
-    /*
-    success= do_test_new_scaleup_loop_fine();
-    if ( 0 == dash::myid() ) { cout << "   new scaleup loop coarse: " << success << endl; }
-    allsuccess &= success;
-    */
-
-    success= do_test_initboundary();
-    if ( 0 == dash::myid() ) { cout << "   initboundary: " << success << endl; }
-    allsuccess &= success;
-
-    //success= do_test_writetocsv();
-    //if ( 0 == dash::myid() ) { cout << "   writetocsv: " << success << endl; }
-    //allsuccess &= success;
-
-    /*
-     * success= do_test_scaleupdown();
-    if ( 0 == dash::myid() ) { cout << "   new scaleupdown: " << success << endl; }
-    allsuccess &= success;
-    */
-
-    if ( 0 == dash::myid() ) { cout << "all tests: " << allsuccess << endl; }
-
-    return allsuccess;
-}
-
-
 int main( int argc, char* argv[] ) {
 
     // main
@@ -3580,7 +3279,7 @@ int main( int argc, char* argv[] ) {
     auto id= dash::myid();
     minimon.stop( "dash::init", dash::Team::All().size() );
 
-    enum { TEST, FLAT, SIM, MULTIGRID, ELASTICMULTIGRID };
+    enum { FLAT, SIM, MULTIGRID, ELASTICMULTIGRID };
 
     int whattodo= MULTIGRID;
 
@@ -3606,7 +3305,6 @@ const char* HELPTEXT= "\n"
 "\n"
 " Modes of operation\n"
 "\n"
-" -t|--test     run some internal tests\n"
 " -e[<s>]|--elastic[=<s>]\n"
 "               use elastic multigrid mode, i.e., use fewer units (processes)\n"
 "               on coarser grids, <s> gives the stepping for the unit reduction\n"
@@ -3644,16 +3342,7 @@ const char* HELPTEXT= "\n"
     /* round 2 over all command line arguments */
     for ( int a= 1; a < argc; a++ ) {
 
-        if ( 0 == strncmp( "-t", argv[a], 2  ) ||
-                0 == strncmp( "--tests", argv[a], 7 )) {
-
-            whattodo= TEST;
-            if ( 0 == dash::myid() ) {
-
-                cout << "run tests" << endl;
-            }
-
-        } else if ( 0 == strncmp( "--sim", argv[a], 5 ) && ( a+2 < argc ) ) {
+        if ( 0 == strncmp( "--sim", argv[a], 5 ) && ( a+2 < argc ) ) {
 
             whattodo= SIM;
             timerange= atof( argv[a+1] );
@@ -3744,10 +3433,6 @@ const char* HELPTEXT= "\n"
     double res = -1.0;
     switch ( whattodo ) {
 
-        case TEST:
-            tags.push_back("test");
-            do_tests();
-            break;
         case SIM:
             tags.push_back("sim");
             tags.push_back("timerange=" + std::to_string(timerange));
