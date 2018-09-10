@@ -12,28 +12,6 @@
 
 #include <libdash.h>
 
-using time_point_t = std::chrono::time_point<std::chrono::high_resolution_clock>;
-using time_diff_t  = std::chrono::duration<double>;
-
-struct MiniMonValue {
-
-    time_diff_t runtime_sum;
-    time_diff_t runtime_min;
-    time_diff_t runtime_max;
-    uint32_t num;
- //std::numeric_limits<int>::max()
-    MiniMonValue( ) : runtime_sum(0.0), runtime_min(1.0e300), runtime_max(0.0), num(0) {}
-
-    void apply( time_diff_t value ) {
-
-        runtime_sum += value;
-        runtime_min= std::min( runtime_min, value );
-        runtime_max= std::max( runtime_max, value );
-        num += 1;
-    }
-};
-
-
 static std::ofstream& operator<<(std::ofstream& ofs, const std::vector<std::string>& args) {
    std::string sep = "";
    for (const auto &s : args) {
@@ -91,6 +69,28 @@ public:
     }
 
 private:
+    using time_point_t = std::chrono::time_point<std::chrono::high_resolution_clock>;
+    using time_diff_t  = std::chrono::duration<double>;
+
+    struct MiniMonValue {
+
+        time_diff_t runtime_sum;
+        time_diff_t runtime_min;
+        time_diff_t runtime_max;
+        uint32_t num;
+     //std::numeric_limits<int>::max()
+        MiniMonValue( ) : runtime_sum(0.0), runtime_min(1.0e300), runtime_max(0.0), num(0) {}
+
+        void apply( time_diff_t value ) {
+
+            runtime_sum += value;
+            runtime_min= std::min( runtime_min, value );
+            runtime_max= std::max( runtime_max, value );
+            num += 1;
+        }
+    };
+
+
     std::map<std::tuple<const char*,uint32_t,uint64_t,uint64_t>,MiniMonValue> _store;
     std::stack<time_point_t, std::vector<time_point_t>> _entries;
 };
