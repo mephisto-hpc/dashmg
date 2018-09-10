@@ -35,66 +35,64 @@ struct MiniMonValue {
 
 
 static std::ofstream& operator<<(std::ofstream& ofs, const std::vector<std::string>& args) {
-  std::string sep = "";
-  for (const auto &s : args) {
-      ofs << sep;
-      ofs << s;
-      sep = ",";
-  }
-  return ofs;
+   std::string sep = "";
+   for (const auto &s : args) {
+        ofs << sep;
+        ofs << s;
+        sep = ",";
+   }
+   return ofs;
 }
 
 class MiniMon {
 
 public:
 
-   MiniMon() = default;
+    MiniMon() = default;
 
-   void start() {
+    void start() {
 
-      _entries.push(std::chrono::high_resolution_clock::now());
-   }
+        _entries.push(std::chrono::high_resolution_clock::now());
+    }
 
-   void stop( const char* n, uint32_t p, uint64_t e = 1,
-         uint64_t f = 0, uint64_t r = 0, uint64_t w = 0 ) {
+    void stop( const char* n, uint32_t p, uint64_t e = 1,
+               uint64_t f = 0, uint64_t r = 0, uint64_t w = 0 ) {
 
-      auto& top = _entries.top();
-      _store[ {n,p,e,f} ].apply( std::chrono::high_resolution_clock::now() - top );
-      _entries.pop();
-   }
+        auto& top = _entries.top();
+        _store[ {n,p,e,f} ].apply( std::chrono::high_resolution_clock::now() - top );
+        _entries.pop();
+    }
 
-   void print(uint32_t id, const std::vector<std::string>& tags) {
-      /* print out log to individual files */
+    void print(uint32_t id, const std::vector<std::string>& tags) {
+        /* print out log to individual files */
 
-      {
-      std::ofstream file;
-      std::ostringstream file_name;
-      file_name << "overview_" << std::setw(5) << std::setfill('0') << id << ".csv";
-      file.open(file_name.str());
+        {
+            std::ofstream file;
+            std::ostringstream file_name;
+            file_name << "overview_" << std::setw(5) << std::setfill('0') << id << ".csv";
+            file.open(file_name.str());
 
-      file << "# tag;function_name;par;elements;flops;num_calls;avg_runtime;min_runtime;max_runtime"
-           << std::endl;
+            file << "# tag;function_name;par;elements;flops;num_calls;avg_runtime;min_runtime;max_runtime"
+                 << std::endl;
 
-      for( auto& e : _store) {
-         file << tags << ";" <<
-            std::get<0>(e.first) << ";" <<
-            std::get<1>(e.first) << ";" <<
-            std::get<2>(e.first) << ";" <<
-            std::get<3>(e.first) << ";" <<
-            e.second.num << ";" <<
-            e.second.runtime_sum.count() / e.second.num << ";" <<
-            e.second.runtime_min.count() << ";" <<
-            e.second.runtime_max.count() << std::endl;
-      }
-      file.close();
-      }
-   }
-
-
+            for (auto& e : _store) {
+                file << tags << ";" <<
+                    std::get<0>(e.first) << ";" <<
+                    std::get<1>(e.first) << ";" <<
+                    std::get<2>(e.first) << ";" <<
+                    std::get<3>(e.first) << ";" <<
+                    e.second.num << ";" <<
+                    e.second.runtime_sum.count() / e.second.num << ";" <<
+                    e.second.runtime_min.count() << ";" <<
+                    e.second.runtime_max.count() << std::endl;
+            }
+            file.close();
+        }
+    }
 
 private:
-   std::map<std::tuple<const char*,uint32_t,uint64_t,uint64_t>,MiniMonValue> _store;
-   std::stack<time_point_t, std::vector<time_point_t>> _entries;
+    std::map<std::tuple<const char*,uint32_t,uint64_t,uint64_t>,MiniMonValue> _store;
+    std::stack<time_point_t, std::vector<time_point_t>> _entries;
 };
 
 #endif /* MINIMONITORING_H */
