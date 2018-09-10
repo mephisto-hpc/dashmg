@@ -10,8 +10,6 @@
 #include <map>
 #include <tuple>
 
-#include <libdash.h>
-
 static std::ofstream& operator<<(std::ofstream& ofs, const std::vector<std::string>& args) {
    std::string sep = "";
    for (const auto &s : args) {
