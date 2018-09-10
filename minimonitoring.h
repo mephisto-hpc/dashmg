@@ -39,7 +39,7 @@ public:
         _entries.pop();
     }
 
-    void print(uint32_t id, const std::vector<std::string>& tags) {
+    void print(uint32_t id, const std::vector<std::string>& tags) const {
         /* print out log to individual files */
 
         {
