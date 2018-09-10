@@ -2555,7 +2555,7 @@ void recursive_cycle( Iterator it, Iterator itend,
 
             j++;
         }
-        if ( 0 == dash::myid()  ) {
+        if ( 0 == dash::myid() ) {
             cout << "smoothing " <<
             (*it)->src_grid->extent(2) << "×" <<
             (*it)->src_grid->extent(1) << "×" <<
@@ -2706,10 +2706,6 @@ void smoothen_final( Level& level, double epsilon, Allreduce& res ) {
 
         smoothen( level, res );
         j++;
-        if ( ( 0 == dash::myid() ) && ( 0 == j % 100 ) ) {
-            cout << j << "smoothen finest, residual " << res.get() << "    "<< fflush << "\r";
-        }
-
     }
     if ( 0 == dash::myid() ) {
         cout << "smoothing: " << j << " steps finest with residual " << res.get() << endl;
@@ -2730,7 +2726,7 @@ if ( 0 == dash::myid()  ) {
 }
 
 
-void do_multigrid_iteration( uint32_t howmanylevels, double eps, std::array< double, 3 >& dim ) {
+double do_multigrid_iteration( uint32_t howmanylevels, double eps, std::array< double, 3 >& dim ) {
     SCOREP_USER_FUNC()
 
     // setup
@@ -2879,11 +2875,13 @@ void do_multigrid_iteration( uint32_t howmanylevels, double eps, std::array< dou
             cout << "test for asymmetry of soution failed!" << endl;
         }
     }
+
+    return res.get();
 }
 
 
 /* elastic mode runs but still seems to have errors in it */
-void do_multigrid_elastic( uint32_t howmanylevels, double eps, std::array< double, 3 >& dim, int split ) {
+double do_multigrid_elastic( uint32_t howmanylevels, double eps, std::array< double, 3 >& dim, int split ) {
 
     // setup
     minimon.start();
@@ -3088,11 +3086,13 @@ void do_multigrid_elastic( uint32_t howmanylevels, double eps, std::array< doubl
             cout << "test for asymmetry of soution failed!" << endl;
         }
     }
+
+    return res.get();
 }
 
 
-void do_simulation( uint32_t howmanylevels, double timerange, double timestep,
-                    std::array< double, 3 >& dim ) {
+double do_simulation( uint32_t howmanylevels, double timerange, double timestep,
+                      std::array< double, 3 >& dim ) {
 
     // setup
     minimon.start();
@@ -3177,9 +3177,9 @@ void do_simulation( uint32_t howmanylevels, double timerange, double timestep,
 
         j++;
 
-        if ( 0 == dash::myid() && ( 0 == j % 100 ) ) {
-            cout << j << ": smoothen grid with residual " << res.get() << endl;
-        }
+    }
+    if ( 0 == dash::myid() ) {
+        cout << "smoothing: " << j << " steps finest with residual " << res.get() << endl;
     }
 
 
@@ -3188,10 +3188,12 @@ void do_simulation( uint32_t howmanylevels, double timerange, double timestep,
 
     delete level;
     level= NULL;
+
+    return res.get();
 }
 
 
-void do_flat_iteration( uint32_t howmanylevels, double eps, std::array< double, 3 >& dim ) {
+double do_flat_iteration( uint32_t howmanylevels, double eps, std::array< double, 3 >& dim ) {
 
     // setup
     minimon.start();
@@ -3244,10 +3246,9 @@ void do_flat_iteration( uint32_t howmanylevels, double eps, std::array< double, 
         smoothen( *level, res );
 
         j++;
-
-        if ( 0 == dash::myid() && ( 0 == j % 100 ) ) {
-            cout << j << ": smoothen grid with residual " << res.get() << endl;
-        }
+    }
+    if ( 0 == dash::myid() ) {
+        cout << "smoothing: " << j << " steps finest with residual " << res.get() << endl;
     }
 
     minimon.stop( "algorithm", dash::Team::All().size() );
@@ -3262,6 +3263,8 @@ void do_flat_iteration( uint32_t howmanylevels, double eps, std::array< double, 
 
     delete level;
     level= NULL;
+
+    return res.get();
 }
 
 
@@ -3738,6 +3741,7 @@ const char* HELPTEXT= "\n"
         "old"
 #endif
     ;
+    double res = -1.0;
     switch ( whattodo ) {
 
         case TEST:
@@ -3748,25 +3752,25 @@ const char* HELPTEXT= "\n"
             tags.push_back("sim");
             tags.push_back("timerange=" + std::to_string(timerange));
             tags.push_back("timestep=" + std::to_string(timestep));
-            do_simulation( howmanylevels, timerange, timestep, dimensions );
+            res = do_simulation( howmanylevels, timerange, timestep, dimensions );
             break;
         case FLAT:
             tags.push_back("flat");
             tags.push_back("eps=" + std::to_string(epsilon));
-            do_flat_iteration( howmanylevels, epsilon, dimensions );
+            res = do_flat_iteration( howmanylevels, epsilon, dimensions );
             break;
         case ELASTICMULTIGRID:
             tags.push_back("multigridelastic");
             tags.push_back("eps=" + std::to_string(epsilon));
             tags.push_back("split=" + std::to_string(split));
             tags.push_back("scaleup=" + scaleup_kind);
-            do_multigrid_elastic( howmanylevels, epsilon, dimensions, split );
+            res = do_multigrid_elastic( howmanylevels, epsilon, dimensions, split );
             break;
         default:
             tags.push_back("multigrid");
             tags.push_back("eps=" + std::to_string(epsilon));
             tags.push_back("scaleup=" + scaleup_kind);
-            do_multigrid_iteration( howmanylevels, epsilon, dimensions );
+            res = do_multigrid_iteration( howmanylevels, epsilon, dimensions );
     }
 
     // dash::finalize
@@ -3778,6 +3782,16 @@ const char* HELPTEXT= "\n"
 
     minimon.stop( "main", dash::Team::All().size() );
     minimon.print(id, tags);
+
+    if ( id == 0 ) {
+        cout << "\n"
+             << "Result:\n"
+             << "\n"
+             << "Total runtime:         " << minimon.get("algorithm") << " sec\n"
+             << "Included wait runtime: " << minimon.get("smoothen_wait") << " sec\n"
+             << "Final residual:        " << res
+             << endl;
+    }
 
     return 0;
 }

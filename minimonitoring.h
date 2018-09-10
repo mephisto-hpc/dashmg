@@ -31,12 +31,21 @@ public:
         _entries.push(std::chrono::high_resolution_clock::now());
     }
 
-    void stop( const char* n, uint32_t p, uint64_t e = 1,
+    void stop( const std::string& n, uint32_t p, uint64_t e = 1,
                uint64_t f = 0, uint64_t r = 0, uint64_t w = 0 ) {
 
         auto& top = _entries.top();
         _store[ {n,p,e,f} ].apply( std::chrono::high_resolution_clock::now() - top );
         _entries.pop();
+    }
+
+    double get(const std::string& n) {
+        double res = 0.0;
+        const auto it = _store.lower_bound({n,0,0,0});
+        const auto itend = _store.upper_bound({n,UINT32_MAX,UINT32_MAX,UINT64_MAX});
+        while (it != itend)
+            res += it->second.runtime_sum.count();
+        return res;
     }
 
     void print(uint32_t id, const std::vector<std::string>& tags) const {
@@ -89,7 +98,7 @@ private:
     };
 
 
-    std::map<std::tuple<const char*,uint32_t,uint64_t,uint64_t>,MiniMonValue> _store;
+    std::map<std::tuple<std::string,uint32_t,uint64_t,uint64_t>,MiniMonValue> _store;
     std::stack<time_point_t, std::vector<time_point_t>> _entries;
 };
 
