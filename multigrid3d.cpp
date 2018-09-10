@@ -552,34 +552,6 @@ void initboundary_zero( Level& level ) {
 }
 
 
-void markunits( MatrixT& grid ) {
-
-    /* Mark unit bordery by setting the first local rows and columns */
-
-    size_t w= grid.local.extent(2);
-    size_t h= grid.local.extent(1);
-    size_t d= grid.local.extent(0);
-
-    for ( size_t i = 0; i < d; ++i ) {
-        for ( size_t j = 0; j < h; ++j ) {
-            grid.local[i][j][0] = 8.0;
-        }
-    }
-
-    for ( size_t i = 0; i < d; ++i ) {
-        for ( size_t k = 0; k < w; ++k ) {
-            grid.local[i][0][k] = 8.0;
-        }
-    }
-
-    for ( size_t j = 0; j < h; ++j ) {
-        for ( size_t k = 0; k < w; ++k ) {
-            grid.local[0][j][k] = 8.0;
-        }
-    }
-}
-
-
 /* check some grid values for 3d mirror symmetry. This should hold for
 appropriate boundary conditions and a correct solver.
 
@@ -2870,7 +2842,6 @@ void do_multigrid_iteration( uint32_t howmanylevels, double eps, std::array< dou
     /* Fill finest level. Strictly, we don't need to set any initial values here
     but we do it for demonstration in the graphical output */
     initgrid( *levels.front() );
-    //markunits( *levels.front()->src_grid );
 
     dash::Team::All().barrier();
 
@@ -3069,7 +3040,6 @@ void do_multigrid_elastic( uint32_t howmanylevels, double eps, std::array< doubl
     /* Fill finest level. Strictly, we don't need to set any initial values here
     but we do it for demonstration in the graphical output */
     initgrid( *levels.front() );
-    //markunits( *levels.front()->src_grid );
 
     dash::Team::All().barrier();
 
@@ -3160,7 +3130,6 @@ void do_simulation( uint32_t howmanylevels, double timerange, double timestep,
     initboundary( *level );
 
     initgrid( *level );
-    // markunits( *level->src_grid );
 
     dash::barrier();
 
@@ -3259,7 +3228,6 @@ void do_flat_iteration( uint32_t howmanylevels, double eps, std::array< double, 
     initboundary( *level );
 
     initgrid( *level );
-    //markunits( *level->src_grid );
 
     dash::barrier();
 
