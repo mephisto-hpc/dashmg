@@ -11,16 +11,6 @@
 #include "allreduce.h"
 #include "minimonitoring.h"
 
-#ifdef WITHCSVOUTPUT
-
-/* make it a shared value to keep it in sync over all units
-even in elastic mode when some units take part in some iterations
-and some do not. Having everyone ++ it individually won't work anymore. */
-dash::Shared<uint32_t>* filenumber;
-
-
-#endif /* WITHCSVOUTPUT */
-
 /* TODOs
 
 - add clean version of the code:
@@ -467,224 +457,6 @@ private:
     StencilOpT _stencil_op_2;
 
 };
-
-
-/* global resolution for cvs output, should be fixed such that
-paraview gets input of constant dimensions. Any size > 2 should be good
-but odd numbers are suggested. */
-std::array< long int, 3 > resolution= {33,33,33};
-
-/* helper function for the following write_to_cvs() function */
-inline double arbitrary_element( const MatrixT& grid, HaloT& halo,
-        std::array< long int, 3 >& corner, std::array< size_t, 3 >& localdim,
-        int zz, int yy, int xx ) {
-
-    /* is halo value? That is when any coordinate is -1 or dim[.].
-    TODO replace by halo convenience layer that provides either
-    halo value or grid value for coordinates [-1:dim[.]] inclusively. */
-    if ( -1 == zz-corner[0] || -1 == yy-corner[1] || -1 == xx-corner[2] ||
-            localdim[0] == zz-corner[0] || localdim[1] == yy-corner[1] || localdim[2] == xx-corner[2] ) {
-
-        /* get halo value */
-        return *halo.halo_element_at_global( {zz,yy,xx} );
-    } else {
-
-        /* get grid value */
-        return grid.local[zz-corner[0]][yy-corner[1]][xx-corner[2]];
-    }
-}
-
-
-/* write out the current state of the given grid as CSV so that Paraview can
-read and visualize it as a structured grid. Use a fixed size for the grid as
-defined by the previous global variable. So an animations of the
-multigrid procedure is possible.
-
-Do not restrict the grid sizes in any way. Lay an output grid over the source grid,
-then interpolate every output grid point from the 8 neighbor source grid points.
-
-Require halos, include boundary conditions in output.
-
-Accept checks whether any point is part of the grid or part of the halo to make this code simpler.
-
-*/
-//void writeToCsv_interpolate( const Level& level ) {
-void writeToCsv( const Level& level ) {
-
-#ifdef WITHCSVOUTPUT
-
-    using signed_size_t = typename std::make_signed<size_t>::type;
-
-    const MatrixT& grid= *level.src_grid;
-    HaloT& halo= *level.src_halo;
-
-    static std::ostringstream csvfile; /* replace ofstream by ostringstream to have
-    only one large file operation -- check if a preallocated C string with snprintf
-    is even faster */
-    csvfile.str(""); /* clear the _static_ ostringstream in case it was used before */
-    std::ofstream csvfileforreal;
-    std::ostringstream num_string;
-    num_string << std::setw(5) << std::setfill('0') << (uint32_t) filenumber->get();
-    csvfileforreal.open( "image_unit" + std::to_string(grid.team().myid()) +
-        ".csv." + num_string.str() );
-
-    std::array< long int, 3 > corner= grid.pattern().global( {0,0,0} );
-    std::array< size_t, 3 > dim= grid.extents();
-    std::array< size_t, 3 > localdim= grid.local.extents();
-
-    /*
-    cout << "unit " << dash::myid() << " localdim " <<
-        localdim[0] << "," << localdim[1] << "," << localdim[2] << endl;
-    */
-
-    std::array< long int, 3 > corner0= grid.pattern().global( {0,0,0} );
-    std::array< long int, 3 > corner1=
-        grid.pattern().global( {(signed_size_t)localdim[0]-1,(signed_size_t)localdim[1]-1,(signed_size_t)localdim[2]-1} );
-
-    /* start and stop are in output grid coordinates */
-    std::array< long int, 3 > start;
-    std::array< long int, 3 > stop;
-    for ( size_t i= 0; i < 3; ++i ) {
-
-        start[i]= corner[i] * resolution[i] / dim[i];
-        stop[i]= ( corner[i] + localdim[i] ) * resolution[i] / dim[i];
-    }
-
-    /*
-    cout << "unit " << dash::myid() << " range " <<
-        start[0] << "," << start[1] << "," << start[2] << " - " <<
-        stop[0] << "," << stop[1] << "," << stop[2] << endl;
-    */
-
-    grid.barrier();
-    if ( 0 == dash::myid() ) {
-        //csvfile << " z-index,y-index,x-index,z-coord,y-coord,x-coord,heat" << "\n";
-        filenumber->set( 1 + (uint32_t) filenumber->get()  );
-    }
-    grid.barrier();
-
-    /* update halo values, cannot do it async here because there is not much else to do. */
-    halo.update();
-
-    /* z,y,z are in output grid coordinates */
-    for ( int z= start[0]; z < stop[0]; ++z ) {
-        for ( int y= start[1]; y < stop[1]; ++y ) {
-            for ( int x= start[2]; x < stop[2]; ++x ) {
-
-                /* for every point of the output grid, determine the 8 nearest
-                input grid points. They are represented as pos[]+add[] where
-                add= {1,1,1} except for border cases. */
-
-                /* pos and pos_double are in input grid coordinates */
-                std::array< long int, 3 > pos;
-                pos[0]= z * (dim[0]+1) / (resolution[0]-1) -1;
-                pos[1]= y * (dim[1]+1) / (resolution[1]-1) -1;
-                pos[2]= x * (dim[2]+1) / (resolution[2]-1) -1;
-
-                /* factorf(ront) and factor_b(ack) with factor_f[.] + factor_b[.] == 1.0 i.e.,
-                the linear interpolation per dimension adds to 1.0 always */
-                std::array< double, 3 > factor_b;;
-                factor_b[0]= ((double) z) * (dim[0]+1.0) / (resolution[0]-1) - 1.0 - pos[0];
-                factor_b[1]= ((double) y) * (dim[1]+1.0) / (resolution[1]-1) - 1.0 - pos[1];
-                factor_b[2]= ((double) x) * (dim[2]+1.0) / (resolution[2]-1) - 1.0 - pos[2];
-
-                assert( 0.0 <= factor_b[0] && factor_b[0] < 1.0 );
-                assert( 0.0 <= factor_b[1] && factor_b[1] < 1.0 );
-                assert( 0.0 <= factor_b[2] && factor_b[2] < 1.0 );
-
-                std::array< double, 3 > factor_f;
-                factor_f[0]= 1.0 - factor_b[0];
-                factor_f[1]= 1.0 - factor_b[1];
-                factor_f[2]= 1.0 - factor_b[2];
-
-                std::array< long int, 3 > add;
-                add[0]= ( 0 == z || stop[0]-1 == z ) ? 0 : 1;
-                add[1]= ( 0 == y || stop[1]-1 == y ) ? 0 : 1;
-                add[2]= ( 0 == x || stop[2]-1 == x ) ? 0 : 1;
-
-                double value= 0.0;
-
-                value += factor_f[0]*factor_f[1]*factor_f[2] * arbitrary_element( grid, halo, corner, localdim, pos[0]       , pos[1]       , pos[2]        );
-                value += factor_f[0]*factor_f[1]*factor_b[2] * arbitrary_element( grid, halo, corner, localdim, pos[0]       , pos[1]       , pos[2]+add[2] );
-                value += factor_f[0]*factor_b[1]*factor_f[2] * arbitrary_element( grid, halo, corner, localdim, pos[0]       , pos[1]+add[1], pos[2]        );
-                value += factor_f[0]*factor_b[1]*factor_b[2] * arbitrary_element( grid, halo, corner, localdim, pos[0]       , pos[1]+add[1], pos[2]+add[2] );
-                value += factor_b[0]*factor_f[1]*factor_f[2] * arbitrary_element( grid, halo, corner, localdim, pos[0]+add[0], pos[1]       , pos[2]        );
-                value += factor_b[0]*factor_f[1]*factor_b[2] * arbitrary_element( grid, halo, corner, localdim, pos[0]+add[0], pos[1]       , pos[2]+add[2] );
-                value += factor_b[0]*factor_b[1]*factor_f[2] * arbitrary_element( grid, halo, corner, localdim, pos[0]+add[0], pos[1]+add[1], pos[2]        );
-                value += factor_b[0]*factor_b[1]*factor_b[2] * arbitrary_element( grid, halo, corner, localdim, pos[0]+add[0], pos[1]+add[1], pos[2]+add[2] );
-
-                csvfile <<
-                    setfill('0') << setw(4) << z << "," <<
-                    setfill('0') << setw(4) << y << "," <<
-                    setfill('0') << setw(4) << x << "," <<
-                    (double) level.sz * z / (resolution[0]-1) << "," <<
-                    (double) level.sy * y / (resolution[1]-1) << "," <<
-                    (double) level.sx * x / (resolution[2]-1) << "," <<
-                    value << "\n";
-            }
-        }
-    }
-
-    csvfileforreal << csvfile.str();
-    csvfileforreal.close();
-
-#endif /* WITHCSVOUTPUT */
-}
-
-
-/* write out the grid in its actual size */
-//void writeToCsvFullGrid( const Level& level ) {
-void writeToCsv_full_grid( const Level& level ) {
-
-#ifdef WITHCSVOUTPUT
-
-    const MatrixT& grid= *level.src_grid;
-
-    std::array< long int, 3 > corner= grid.pattern().global( {0,0,0} );
-
-    size_t d= grid.extent(0);
-    size_t h= grid.extent(1);
-    size_t w= grid.extent(2);
-
-    size_t dl= grid.local.extent(0);
-    size_t hl= grid.local.extent(1);
-    size_t wl= grid.local.extent(2);
-
-    /*
-    cout << "writeToCsvFullGrid " <<
-        dl << "," << hl << "," << wl << " of " <<
-        d << "," << h << "," << w << endl;
-    */
-
-    std::ofstream csvfile;
-    std::ostringstream num_string;
-    num_string << std::setw(5) << std::setfill('0') << (uint32_t) filenumber->get();
-    csvfile.open( "image_unit" + std::to_string(dash::myid()) +
-        ".csv." + num_string.str() );
-
-    grid.barrier();
-    if ( 0 == dash::myid() ) {
-        csvfile << " z-coord,y-coord,x-coord,heat" << "\n";
-        filenumber->set( 1 + (uint32_t) filenumber->get()  );
-    }
-    grid.barrier();
-
-    for ( size_t z = 0 ; z < dl; ++z ) {
-        for ( size_t y = 0; y < hl; ++y ) {
-            for ( size_t x = 0; x < wl; ++x ) {
-
-                csvfile << setfill('0') << setw(4) << corner[0]+z << "," <<
-                    setfill('0') << setw(4) << corner[1]+y << "," <<
-                    setfill('0') << setw(4) << corner[2]+x << "," <<
-                    (double) grid.local[ z ][ y ][ x ] << "\n";
-            }
-        }
-    }
-
-    csvfile.close();
-
-#endif /* WITHCSVOUTPUT */
-}
 
 
 void initgrid( Level& level ) {
@@ -2817,7 +2589,6 @@ void recursive_cycle( Iterator it, Iterator itend,
             (*it)->src_grid->extent(1) << "×" <<
             (*it)->src_grid->extent(0) << " coarsest " << j << " times with residual " << res.get() << endl;
         }
-        writeToCsv( **it );
 
         return;
     }
@@ -2899,8 +2670,6 @@ void recursive_cycle( Iterator it, Iterator itend,
             (*it)->src_grid->extent(0) << " on way down " << j << " times with residual " << res.get() << endl;
     }
 
-    writeToCsv( **it );
-
     /* scale down */
     if ( 0 == dash::myid() ) {
         cout << "scale down " <<
@@ -2914,7 +2683,6 @@ void recursive_cycle( Iterator it, Iterator itend,
     }
 
     scaledown( **it, **itnext );
-    writeToCsv( **itnext );
 
     /* recurse  */
     for ( uint32_t g= 0; g < gamma; ++g ) {
@@ -2933,7 +2701,6 @@ void recursive_cycle( Iterator it, Iterator itend,
             (*it)->src_grid->extent(0) << endl;
     }
     scaleup( **itnext, **it );
-    writeToCsv( **it );
 
     j= 0;
     res.reset( (*it)->src_grid->team() );
@@ -2950,8 +2717,6 @@ void recursive_cycle( Iterator it, Iterator itend,
             (*it)->src_grid->extent(1) << "×" <<
             (*it)->src_grid->extent(0) << " on way up " << j << " times with residual " << res.get() << endl;
     }
-
-    writeToCsv( **it );
 }
 
 
@@ -3107,8 +2872,6 @@ void do_multigrid_iteration( uint32_t howmanylevels, double eps, std::array< dou
     initgrid( *levels.front() );
     //markunits( *levels.front()->src_grid );
 
-    writeToCsv( *levels.front() );
-
     dash::Team::All().barrier();
 
     Allreduce res( dash::Team::All() );
@@ -3133,7 +2896,6 @@ void do_multigrid_iteration( uint32_t howmanylevels, double eps, std::array< dou
         cout << "final smoothing with res " << eps << endl;
     }
     smoothen_final( *levels.front(), eps, res );
-    writeToCsv( *levels.front() );
 
     minimon.stop( "algorithm", dash::Team::All().size() );
 
@@ -3309,8 +3071,6 @@ void do_multigrid_elastic( uint32_t howmanylevels, double eps, std::array< doubl
     initgrid( *levels.front() );
     //markunits( *levels.front()->src_grid );
 
-    writeToCsv( *levels.front() );
-
     dash::Team::All().barrier();
 
     Allreduce res( dash::Team::All() );
@@ -3346,7 +3106,6 @@ void do_multigrid_elastic( uint32_t howmanylevels, double eps, std::array< doubl
         cout << "final smoothing with res " << eps << endl;
     }
     smoothen_final( *levels.front(), eps, res );
-    writeToCsv( *levels.front() );
 
     minimon.stop( "algorithm", dash::Team::All().size() );
 
@@ -3403,8 +3162,6 @@ void do_simulation( uint32_t howmanylevels, double timerange, double timestep,
     initgrid( *level );
     // markunits( *level->src_grid );
 
-    writeToCsv( *level );
-
     dash::barrier();
 
     double dt= level->max_dt();
@@ -3421,7 +3178,6 @@ void do_simulation( uint32_t howmanylevels, double timerange, double timestep,
     uint32_t j= 0;
 
     if ( 0 == dash::myid() ) { cout << "t= " << time << " j= " << j << endl; }
-    writeToCsv( *level );
 
     while ( time < timerange ) {
 
@@ -3441,7 +3197,6 @@ void do_simulation( uint32_t howmanylevels, double timerange, double timestep,
         timenext += timestep;
 
         if ( 0 == dash::myid() ) { cout << "t= " << time << " j= " << j << endl; }
-        writeToCsv( *level );
     }
 
 
@@ -3451,17 +3206,12 @@ void do_simulation( uint32_t howmanylevels, double timerange, double timestep,
 
         smoothen( *level, res );
 
-        if ( 0 == j % 100 ) {
-            writeToCsv( *level );
-        }
-
         j++;
 
         if ( 0 == dash::myid() && ( 0 == j % 100 ) ) {
             cout << j << ": smoothen grid with residual " << res.get() << endl;
         }
     }
-    writeToCsv( *level );
 
 
 #endif /* 0 */
@@ -3511,8 +3261,6 @@ void do_flat_iteration( uint32_t howmanylevels, double eps, std::array< double, 
     initgrid( *level );
     //markunits( *level->src_grid );
 
-    writeToCsv( *level );
-
     dash::barrier();
 
     Allreduce res( dash::Team::All() );
@@ -3527,17 +3275,12 @@ void do_flat_iteration( uint32_t howmanylevels, double eps, std::array< double, 
 
         smoothen( *level, res );
 
-        if ( 0 == j % 100 ) {
-            writeToCsv( *level );
-        }
-
         j++;
 
         if ( 0 == dash::myid() && ( 0 == j % 100 ) ) {
             cout << j << ": smoothen grid with residual " << res.get() << endl;
         }
     }
-    writeToCsv( *level );
 
     minimon.stop( "algorithm", dash::Team::All().size() );
 
@@ -3731,8 +3474,6 @@ bool do_test_writetocsv() {
     initboundary( *a );
     initgrid( *a );
 
-    writeToCsv( *a );
-
     delete a;
 
     return true;
@@ -3868,14 +3609,6 @@ int main( int argc, char* argv[] ) {
     auto id= dash::myid();
     minimon.stop( "dash::init", dash::Team::All().size() );
 
-#ifdef WITHCSVOUTPUT
-    filenumber= new dash::Shared<uint32_t>();
-    if ( 0 == dash::myid() ) {
-        filenumber->set( 0 );
-    }
-    filenumber->barrier();
-#endif /* WITHCSVOUTPUT */
-
     enum { TEST, FLAT, SIM, MULTIGRID, ELASTICMULTIGRID };
 
     int whattodo= MULTIGRID;
@@ -3913,23 +3646,13 @@ const char* HELPTEXT= "\n"
 "               time. The time step dt is determined by the grid and the\n"
 "               stability condition. This mode matches all time steps n*s <= t\n"
 "               exactly for the sake of a nice visualization.\n"
-"               (Visualization only active when compiled with WITHCSVOUTPUT.)\n"
 " \n"
 " Further options\n"
 "\n"
 " --eps <eps>   define epsilon for the iterative solver in flat or multigrid modes,\n"
 "               the iterative solver on any grid stops when residual <= eps\n"
-" -g <n>        determine size of CSV output -- only when compiled with WITHCSVOUTPUT\n"
-"               the combined CVS output from all units (processes) will be\n"
-"               2^n +1 points in every dimension, default is n= 5 or 33^3 elements\n"
 " -d <d h w>    Set physical dimensions of the simulation grid in meters\n"
 "               (default 10.0, 10.0, 10.0)\n"
-"\n"
-#ifdef WITHCSVOUTPUT
-" (This executable was compiled with WITHCSVOUTPUT)\n"
-#else /* WITHCSVOUTPUT */
-" (This executable was compiled without WITHCSVOUTPUT)\n"
-#endif /* WITHCSVOUTPUT */
 "\n\n";
 
             if ( 0 == dash::myid() ) {
@@ -4012,17 +3735,6 @@ const char* HELPTEXT= "\n"
                 cout << "using epsilon " << epsilon << endl;
             }
 
-        } else if ( 0 == strncmp( "-g", argv[a], 2  ) && ( a+1 < argc ) ) {
-
-            int g= atoi( argv[a+1] );
-            ++a;
-            if ( 0 == dash::myid() ) {
-
-                cout << "using CSV output grid size 2^"<<g<<"+1 == " << ((1<<g)+1) <<
-                    " in every dimension" << endl;
-            }
-            for ( uint32_t i= 0; i < 3; ++i ) resolution[i]= (1<<g)+1;
-
         } else if ( 0 == strncmp( "-d", argv[a], 2  ) && ( a+3 < argc ) ) {
 
             dimensions[0]= atof( argv[a+1] );
@@ -4088,12 +3800,6 @@ const char* HELPTEXT= "\n"
             tags.push_back("scaleup=" + scaleup_kind);
             do_multigrid_iteration( howmanylevels, epsilon, dimensions );
     }
-
-#ifdef WITHCSVOUTPUT
-
-    delete filenumber;
-
-#endif /* WITHCSVOUTPUT */
 
     // dash::finalize
     minimon.start();
