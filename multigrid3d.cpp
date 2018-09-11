@@ -870,12 +870,6 @@ double smoothen( Level& level, Allreduce& res, double coeff= 1.0 ) {
             much nicer but still be fast */
 
             const double* __restrict p_core=  level.src_grid->lbegin() + core_offset;
-            const double* __restrict p_east=  p_core + 1;
-            const double* __restrict p_west=  p_core - 1;
-            const double* __restrict p_north= p_core + lw;
-            const double* __restrict p_south= p_core - lw;
-            const double* __restrict p_up=    p_core + next_layer_off;
-            const double* __restrict p_down=  p_core - next_layer_off;
             const double* __restrict p_rhs=   level.rhs_grid->lbegin() + core_offset;
             double* __restrict p_new= level.dst_grid->lbegin() + core_offset;
 
@@ -887,21 +881,15 @@ double smoothen( Level& level, Allreduce& res, double coeff= 1.0 ) {
                 */
                 double dtheta= m * (
                     ff * *p_rhs -
-                    ax * ( *p_east + *p_west ) -
-                    ay * ( *p_north + *p_south ) -
-                    az * ( *p_up + *p_down ) -
+                    ax * ( p_core[-1] +              p_core[1] ) -
+                    ay * ( p_core[-lw] +             p_core[lw] ) -
+                    az * ( p_core[-next_layer_off] + p_core[next_layer_off] ) -
                     ac * *p_core );
                 *p_new= *p_core + c * dtheta;
 
                 localres= std::max( localres, std::fabs( dtheta ) );
 
                 p_core++;
-                p_east++;
-                p_west++;
-                p_north++;
-                p_south++;
-                p_up++;
-                p_down++;
                 p_rhs++;
                 p_new++;
             }
