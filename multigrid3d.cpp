@@ -803,29 +803,8 @@ cout << "unit " << dash::myid() << " transfertomore" << endl;
     //std::copy( source.src_grid->begin(), source.src_grid->end(), dest.src_grid->begin() );
 }
 
-
-/**
-Smoothen the given level from oldgrid+src_halo to newgrid. Call Level::swap() at the end.
-
-The parallel global residual is returned as a return parameter, but only
-if it is not NULL because then the expensive parallel reduction is just avoided.
-*/
-double smoothen( Level& level, Allreduce& res, double coeff= 1.0 ) {
-    SCOREP_USER_FUNC()
-
-    uint32_t par= level.src_grid->team().size();
-
-    // smoothen
-    minimon.start();
-
-    level.src_grid->barrier();
-
-    size_t ld= level.src_grid->local.extent(0);
-    size_t lh= level.src_grid->local.extent(1);
-    size_t lw= level.src_grid->local.extent(2);
-
-    double localres= 0.0;
-
+static inline double update_inner_dash( Level& level, double coeff )
+{
     double ax= level.ax;
     double ay= level.ay;
     double az= level.az;
@@ -835,19 +814,7 @@ double smoothen( Level& level, Allreduce& res, double coeff= 1.0 ) {
 
     const double c= coeff;
 
-    // async halo update
-    level.src_halo->update_async();
-
-    // smoothen_inner
-    minimon.start();
-
-    // update inner
-
-    /* the start value for both, the y loop and the x loop is 1 because either there is
-    a border area next to the halo -- then the first column or row is covered below in
-    the border update -- or there is an outside border -- then the first column or row
-    contains the boundary values. */
-#if 1
+    double localres= 0.0;
     auto p_rhs=   level.rhs_grid->lbegin();
     level.src_op->inner.update(level.dst_grid->lbegin(),
         [&](auto* center, auto* center_dst, auto offset, const auto& offsets) {
@@ -860,9 +827,30 @@ double smoothen( Level& level, Allreduce& res, double coeff= 1.0 ) {
                 localres= std::max( localres, std::fabs( dtheta ) );
                 *center_dst = *center + c * dtheta;
         });
-#else
+
+    return localres;
+}
+
+
+static inline double update_inner_acc( Level& level, double coeff )
+{
+    size_t ld= level.src_grid->local.extent(0);
+    size_t lh= level.src_grid->local.extent(1);
+    size_t lw= level.src_grid->local.extent(2);
+
+    double ax= level.ax;
+    double ay= level.ay;
+    double az= level.az;
+    double ac= level.acenter;
+    double ff= level.ff;
+    double m= level.m;
+
+    const double c= coeff;
+
     auto next_layer_off = lw * lh;
     auto core_offset = lw * (lh + 1) + 1;
+    double localres= 0.0;
+
     for ( size_t z= 1; z < ld-1; z++ ) {
         for ( size_t y= 1; y < lh-1; y++ ) {
 
@@ -897,6 +885,56 @@ double smoothen( Level& level, Allreduce& res, double coeff= 1.0 ) {
         }
         core_offset += 2 * lw;
     }
+
+    return localres;
+}
+
+
+/**
+Smoothen the given level from oldgrid+src_halo to newgrid. Call Level::swap() at the end.
+
+The parallel global residual is returned as a return parameter, but only
+if it is not NULL because then the expensive parallel reduction is just avoided.
+*/
+double smoothen( Level& level, Allreduce& res, double coeff= 1.0 ) {
+    SCOREP_USER_FUNC()
+
+    uint32_t par= level.src_grid->team().size();
+
+    // smoothen
+    minimon.start();
+
+    level.src_grid->barrier();
+
+    size_t ld= level.src_grid->local.extent(0);
+    size_t lh= level.src_grid->local.extent(1);
+    size_t lw= level.src_grid->local.extent(2);
+
+    double ax= level.ax;
+    double ay= level.ay;
+    double az= level.az;
+    double ac= level.acenter;
+    double ff= level.ff;
+    double m= level.m;
+
+    const double c= coeff;
+
+    // async halo update
+    level.src_halo->update_async();
+
+    // smoothen_inner
+    minimon.start();
+
+    // update inner
+
+    /* the start value for both, the y loop and the x loop is 1 because either there is
+    a border area next to the halo -- then the first column or row is covered below in
+    the border update -- or there is an outside border -- then the first column or row
+    contains the boundary values. */
+#if 1
+    double localres = update_inner_dash(level, coeff);
+#else
+    double localres = update_inner_acc(level, coeff);
 #endif
     minimon.stop( "smoothen_inner", par, /* elements */ (ld-2)*(lh-2)*(lw-2), /* flops */ 16*(ld-2)*(lh-2)*(lw-2), /*loads*/ 7*(ld-2)*(lh-2)*(lw-2), /* stores */ (ld-2)*(lh-2)*(lw-2) );
 
