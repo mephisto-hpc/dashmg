@@ -839,7 +839,7 @@ template<
 >
 struct UpdateInnerAcc
 {
-    double operator()( Level& level, double coeff, size_t z ) const
+    void operator()( Level& level, double coeff, size_t z, double* res ) const
     {
         size_t lh= level.src_grid->local.extent(1);
         size_t lw= level.src_grid->local.extent(2);
@@ -859,7 +859,11 @@ struct UpdateInnerAcc
         const double* __restrict p_rhs=   level.rhs_grid->lbegin();
         double* __restrict p_dst= level.dst_grid->lbegin();
 
-        double localres= 0.0;
+        std::array<double, NTHREADS> localres;
+        #pragma unroll
+        for (unsigned int tidx = 0; tidx < NTHREADS; tidx++)
+            localres[tidx]= 0.0;
+
         for ( size_t y= 0; y < lh-2; y++ ) {
             auto core_offset = (z + 1) * layer_size + lw + 1
                                + y * lw;
@@ -883,12 +887,21 @@ struct UpdateInnerAcc
                         ac * p_src[core_offset+x] );
                     p_dst[core_offset+x]= p_src[core_offset+x] + c * dtheta;
 
-                    localres= std::max( localres, std::fabs( dtheta ) );
+                    localres[tidx] = std::max( localres[tidx], std::fabs( dtheta ) );
                 }
             }
         }
 
-        return localres;
+        // start reduction
+        auto n = NTHREADS / 2;
+        while (n) {
+            #pragma unroll
+            for (unsigned int tidx = 0; tidx < n && (tidx + n) < NTHREADS; tidx++)
+                localres[tidx] = std::max( localres[tidx], localres[tidx + n] );
+            n /= 2;
+        }
+
+        *res = localres[0];
     }
 };
 
@@ -901,8 +914,11 @@ static inline double update_inner_acc( Level& level, double coeff )
 
     UpdateInnerAcc<NTHREADS> kernel;
     double localres= 0.0;
-    for ( size_t z= 0; z < ld-2; z++ )
-        localres+= kernel(level, coeff, z);
+    for ( size_t z= 0; z < ld-2; z++ ) {
+        double localresz= 0.0;
+        kernel(level, coeff, z, &localresz);
+        localres = std::max( localres, localresz );
+    }
 
     return localres;
 }
