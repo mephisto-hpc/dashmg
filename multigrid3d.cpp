@@ -40,7 +40,7 @@ using StencilOpT = dash::halo::StencilOperator<double,PatternT,StencilSpecT>;
 
 /* for the smoothing operation, only the 6-point stencil is needed.
 However, the prolongation operation also needs the */
-constexpr StencilSpecT stencil_spec(
+StencilSpecT stencil_spec(
     StencilT(0.5, -1, 0, 0), StencilT(0.5, 1, 0, 0),
     StencilT(0.5,  0,-1, 0), StencilT(0.5, 0, 1, 0),
     StencilT(0.5,  0, 0,-1), StencilT(0.5, 0, 0, 1),
@@ -57,7 +57,7 @@ constexpr StencilSpecT stencil_spec(
     StencilT(0.125, -1, 1,-1), StencilT( 0.125, 1, 1,-1),
     StencilT(0.125, -1, 1, 1), StencilT( 0.125, 1, 1, 1));
 
-constexpr CycleSpecT cycle_spec(
+CycleSpecT cycle_spec(
     dash::halo::BoundaryProp::CUSTOM,
     dash::halo::BoundaryProp::CUSTOM,
     dash::halo::BoundaryProp::CUSTOM );
@@ -272,7 +272,7 @@ void initboundary( Level& level ) {
     All other sides are constant at 0.0 degrees. The top an bottom circles are
     hot with 10.0 degrees. */
 
-    auto lambda= [gd,gh,gw]( const auto& coords ) {
+    auto lambda= [gd,gh,gw]( const std::array<index_t, 3>& coords ) {
 
         index_t z= coords[0];
         index_t y= coords[1];
@@ -330,7 +330,7 @@ void initboundary_zero( Level& level ) {
 
     using index_t = dash::default_index_t;
 
-    auto lambda= []( const auto& coords ) { return 0.0; };
+    auto lambda= []( const std::array<index_t, 3>& coords ) { return 0.0; };
 
     level.src_halo->set_custom_halos( lambda );
     level.dst_halo->set_custom_halos( lambda );
@@ -404,6 +404,8 @@ bool check_symmetry( MatrixT& grid, double eps ) {
 
 void scaledownboundary( Level& fine, Level& coarse ) {
 
+    using index_t = dash::default_index_t;
+
     assert( coarse.src_grid->extent(2)*2 == fine.src_grid->extent(2) );
     assert( coarse.src_grid->extent(1)*2 == fine.src_grid->extent(1) );
     assert( coarse.src_grid->extent(0)*2 == fine.src_grid->extent(0) );
@@ -414,7 +416,7 @@ void scaledownboundary( Level& fine, Level& coarse ) {
 
     auto finehalo= fine.src_halo;
 
-    auto lambda= [&finehalo,&dmax,&hmax]( const auto& coord ) {
+    auto lambda= [&finehalo,&dmax,&hmax]( const std::array<index_t, 3>& coord ) {
 
         auto coordf= coord;
         for( auto& c : coordf ) {
