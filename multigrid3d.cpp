@@ -835,29 +835,29 @@ static inline double update_inner_dash( Level& level, double coeff )
 template<
     unsigned int NTHREADS
 >
-static inline double update_inner_acc( Level& level, double coeff )
+struct UpdateInnerAcc
 {
-    size_t ld= level.src_grid->local.extent(0);
-    size_t lh= level.src_grid->local.extent(1);
-    size_t lw= level.src_grid->local.extent(2);
+    double operator()( Level& level, double coeff, size_t z ) const
+    {
+        size_t lh= level.src_grid->local.extent(1);
+        size_t lw= level.src_grid->local.extent(2);
 
-    double ax= level.ax;
-    double ay= level.ay;
-    double az= level.az;
-    double ac= level.acenter;
-    double ff= level.ff;
-    double m= level.m;
+        double ax= level.ax;
+        double ay= level.ay;
+        double az= level.az;
+        double ac= level.acenter;
+        double ff= level.ff;
+        double m= level.m;
 
-    const double c= coeff;
+        const double c= coeff;
 
-    auto layer_size = lw * lh;
+        auto layer_size = lw * lh;
 
-    const double* __restrict p_src=  level.src_grid->lbegin();
-    const double* __restrict p_rhs=   level.rhs_grid->lbegin();
-    double* __restrict p_dst= level.dst_grid->lbegin();
+        const double* __restrict p_src=  level.src_grid->lbegin();
+        const double* __restrict p_rhs=   level.rhs_grid->lbegin();
+        double* __restrict p_dst= level.dst_grid->lbegin();
 
-    double localres= 0.0;
-    for ( size_t z= 0; z < ld-2; z++ ) {
+        double localres= 0.0;
         for ( size_t y= 0; y < lh-2; y++ ) {
             auto core_offset = (z + 1) * layer_size + lw + 1
                                + y * lw;
@@ -885,11 +885,25 @@ static inline double update_inner_acc( Level& level, double coeff )
                 }
             }
         }
+
+        return localres;
     }
+};
+
+template<
+    unsigned int NTHREADS
+>
+static inline double update_inner_acc( Level& level, double coeff )
+{
+    size_t ld= level.src_grid->local.extent(0);
+
+    UpdateInnerAcc<NTHREADS> kernel;
+    double localres= 0.0;
+    for ( size_t z= 0; z < ld-2; z++ )
+        localres+= kernel(level, coeff, z);
 
     return localres;
 }
-
 
 /**
 Smoothen the given level from oldgrid+src_halo to newgrid. Call Level::swap() at the end.
