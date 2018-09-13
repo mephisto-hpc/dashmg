@@ -847,43 +847,38 @@ static inline double update_inner_acc( Level& level, double coeff )
 
     const double c= coeff;
 
-    auto next_layer_off = lw * lh;
-    auto core_offset = lw * (lh + 1) + 1;
-    double localres= 0.0;
+    auto layer_size = lw * lh;
 
-    for ( size_t z= 1; z < ld-1; z++ ) {
-        for ( size_t y= 1; y < lh-1; y++ ) {
+    const double* __restrict p_src=  level.src_grid->lbegin();
+    const double* __restrict p_rhs=   level.rhs_grid->lbegin();
+    double* __restrict p_dst= level.dst_grid->lbegin();
+
+    double localres= 0.0;
+    for ( size_t z= 0; z < ld-2; z++ ) {
+        for ( size_t y= 0; y < lh-2; y++ ) {
+            auto core_offset = (z + 1) * layer_size + lw + 1
+                               + y * lw;
 
             /* this should eventually be done with Alpaka or Kokkos to look
             much nicer but still be fast */
 
-            const double* __restrict p_core=  level.src_grid->lbegin() + core_offset;
-            const double* __restrict p_rhs=   level.rhs_grid->lbegin() + core_offset;
-            double* __restrict p_new= level.dst_grid->lbegin() + core_offset;
-
-            for ( size_t x= 1; x < lw-1; x++ ) {
+            for ( size_t x= 0; x < lw-2; x++ ) {
 
                 /*
                 stability condition: r <= 1/2 with r= dt/h^2 ==> dt <= 1/2*h^2
                 dtheta= ru*u_plus + ru*u_minus - 2*ru*u_center with ru=dt/hu^2 <= 1/2
                 */
                 double dtheta= m * (
-                    ff * *p_rhs -
-                    ax * ( p_core[-1] +              p_core[1] ) -
-                    ay * ( p_core[-lw] +             p_core[lw] ) -
-                    az * ( p_core[-next_layer_off] + p_core[next_layer_off] ) -
-                    ac * *p_core );
-                *p_new= *p_core + c * dtheta;
+                    ff * p_rhs[core_offset+x] -
+                    ax * ( p_src[core_offset+x-1] +          p_src[core_offset+x+1] ) -
+                    ay * ( p_src[core_offset+x-lw] +         p_src[core_offset+x+lw] ) -
+                    az * ( p_src[core_offset+x-layer_size] + p_src[core_offset+x+layer_size] ) -
+                    ac * p_src[core_offset+x] );
+                p_dst[core_offset+x]= p_src[core_offset+x] + c * dtheta;
 
                 localres= std::max( localres, std::fabs( dtheta ) );
-
-                p_core++;
-                p_rhs++;
-                p_new++;
             }
-            core_offset += lw;
         }
-        core_offset += 2 * lw;
     }
 
     return localres;
