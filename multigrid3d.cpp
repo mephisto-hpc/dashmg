@@ -832,6 +832,9 @@ static inline double update_inner_dash( Level& level, double coeff )
 }
 
 
+template<
+    unsigned int NTHREADS
+>
 static inline double update_inner_acc( Level& level, double coeff )
 {
     size_t ld= level.src_grid->local.extent(0);
@@ -862,21 +865,24 @@ static inline double update_inner_acc( Level& level, double coeff )
             /* this should eventually be done with Alpaka or Kokkos to look
             much nicer but still be fast */
 
-            for ( size_t x= 0; x < lw-2; x++ ) {
+            #pragma unroll
+            for (unsigned int tidx = 0; tidx < NTHREADS; tidx++) {
+                for ( size_t x= tidx; x < lw-2; x+=NTHREADS ) {
 
-                /*
-                stability condition: r <= 1/2 with r= dt/h^2 ==> dt <= 1/2*h^2
-                dtheta= ru*u_plus + ru*u_minus - 2*ru*u_center with ru=dt/hu^2 <= 1/2
-                */
-                double dtheta= m * (
-                    ff * p_rhs[core_offset+x] -
-                    ax * ( p_src[core_offset+x-1] +          p_src[core_offset+x+1] ) -
-                    ay * ( p_src[core_offset+x-lw] +         p_src[core_offset+x+lw] ) -
-                    az * ( p_src[core_offset+x-layer_size] + p_src[core_offset+x+layer_size] ) -
-                    ac * p_src[core_offset+x] );
-                p_dst[core_offset+x]= p_src[core_offset+x] + c * dtheta;
+                    /*
+                    stability condition: r <= 1/2 with r= dt/h^2 ==> dt <= 1/2*h^2
+                    dtheta= ru*u_plus + ru*u_minus - 2*ru*u_center with ru=dt/hu^2 <= 1/2
+                    */
+                    double dtheta= m * (
+                        ff * p_rhs[core_offset+x] -
+                        ax * ( p_src[core_offset+x-1] +          p_src[core_offset+x+1] ) -
+                        ay * ( p_src[core_offset+x-lw] +         p_src[core_offset+x+lw] ) -
+                        az * ( p_src[core_offset+x-layer_size] + p_src[core_offset+x+layer_size] ) -
+                        ac * p_src[core_offset+x] );
+                    p_dst[core_offset+x]= p_src[core_offset+x] + c * dtheta;
 
-                localres= std::max( localres, std::fabs( dtheta ) );
+                    localres= std::max( localres, std::fabs( dtheta ) );
+                }
             }
         }
     }
@@ -929,7 +935,7 @@ double smoothen( Level& level, Allreduce& res, double coeff= 1.0 ) {
 #if 1
     double localres = update_inner_dash(level, coeff);
 #else
-    double localres = update_inner_acc(level, coeff);
+    double localres = update_inner_acc<1>(level, coeff);
 #endif
     minimon.stop( "smoothen_inner", par, /* elements */ (ld-2)*(lh-2)*(lw-2), /* flops */ 16*(ld-2)*(lh-2)*(lw-2), /*loads*/ 7*(ld-2)*(lh-2)*(lw-2), /* stores */ (ld-2)*(lh-2)*(lw-2) );
 
